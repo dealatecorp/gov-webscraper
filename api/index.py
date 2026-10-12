@@ -56,9 +56,13 @@ def current_user():
     if not header.startswith("Bearer "):
         return None
     try:
-        result = database().auth.get_user(header.removeprefix("Bearer "))
+        config = public_config()
+        result = create_client(config["url"], config["key"]).auth.get_user(
+            header.removeprefix("Bearer ")
+        )
         return result.user if result and result.user else None
-    except Exception:
+    except Exception as error:
+        app.logger.warning("Supabase token validation failed: %s", type(error).__name__)
         return None
 
 
