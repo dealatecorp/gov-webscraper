@@ -9,8 +9,9 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, redirect, request, send_from_directory
-from supabase import create_client
+import httpx
+from flask import Flask, Response, g, jsonify, redirect, request, send_from_directory
+from supabase import ClientOptions, create_client
 
 from api.collector import run_collection
 import app as local
@@ -22,11 +23,39 @@ DOMAINS = local.auth.DOMAINS
 app = Flask(__name__)
 
 
+def configured_value(name):
+    value = os.getenv(name, "").strip()
+    if not value or any(ord(char) < 33 or ord(char) > 126 for char in value):
+        raise RuntimeError(f"{name} must be configured with a valid value in Vercel")
+    return value
+
+
+def supabase_client(key_name):
+    clients = g.setdefault("supabase_clients", {})
+    if key_name not in clients:
+        url, key = configured_value("SUPABASE_URL"), configured_value(key_name)
+        # The upstream gateway resets HTTP/2 profile queries in production.
+        # Keep auth and privileged database headers in separate request-local clients.
+        transport = httpx.Client(http2=False, timeout=30.0)
+        try:
+            client = create_client(url, key, options=ClientOptions(
+                httpx_client=transport, persist_session=False, auto_refresh_token=False,
+            ))
+        except Exception:
+            transport.close()
+            raise
+        clients[key_name] = (client, transport)
+    return clients[key_name][0]
+
+
+@app.teardown_appcontext
+def close_supabase_clients(error=None):
+    for _, transport in g.pop("supabase_clients", {}).values():
+        transport.close()
+
+
 def database():
-    url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SECRET_KEY")
-    if not url or not key:
-        raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET_KEY must be configured in Vercel")
-    return create_client(url, key)
+    return supabase_client("SUPABASE_SECRET_KEY")
 
 
 def iso_now():
@@ -34,10 +63,7 @@ def iso_now():
 
 
 def public_config():
-    url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_PUBLISHABLE_KEY")
-    if not url or not key:
-        raise RuntimeError("SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY must be configured in Vercel")
-    return {"url": url, "key": key}
+    return {"url": configured_value("SUPABASE_URL"), "key": configured_value("SUPABASE_PUBLISHABLE_KEY")}
 
 
 def profile_for(user):
@@ -56,8 +82,7 @@ def current_user():
     if not header.startswith("Bearer "):
         return None
     try:
-        config = public_config()
-        result = create_client(config["url"], config["key"]).auth.get_user(
+        result = supabase_client("SUPABASE_PUBLISHABLE_KEY").auth.get_user(
             header.removeprefix("Bearer ")
         )
         return result.user if result and result.user else None
