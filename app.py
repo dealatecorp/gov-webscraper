@@ -310,7 +310,8 @@ def fetch_documents(key):
         DOCUMENT_LOCK.release()
 
 class Client:
-    def __init__(self):
+    def __init__(self, timeout=30, attempts=2, deadline=None):
+        self.timeout,self.attempts,self.deadline=timeout,attempts,deadline
         self.opener=build_opener(SafeRedirect(),HTTPCookieProcessor(http.cookiejar.CookieJar()))
     def binary(self,url):
         if not allowed_url(url):
@@ -326,19 +327,22 @@ class Client:
         headers={'User-Agent':'TenderDesk/1.0 public-notice-monitor','Referer':FEEDS['gem'][1] if 'gem.gov.in' in url else url}
         if data is not None:
             headers['X-Requested-With']='XMLHttpRequest'
-        for attempt in range(2):
+        for attempt in range(self.attempts):
             try:
-                with self.opener.open(Request(url,data=data,headers=headers),timeout=30) as r:
+                remaining=self.deadline-time.monotonic() if self.deadline else self.timeout
+                if remaining<=0:
+                    raise TimeoutError('Collection time budget exhausted')
+                with self.opener.open(Request(url,data=data,headers=headers),timeout=min(self.timeout,remaining)) as r:
                     body=r.read(8_000_001)
                     if len(body)>8_000_000:
                         raise ValueError('Source response exceeds size limit')
                     return body.decode('utf-8',errors='replace')
             except HTTPError as e:
-                if e.code not in (429,500,502,503,504) or attempt:
+                if e.code not in (429,500,502,503,504) or attempt>=self.attempts-1:
                     raise
                 time.sleep(3)
             except (TimeoutError,OSError):
-                if attempt:
+                if attempt>=self.attempts-1:
                     raise
                 time.sleep(2)
 

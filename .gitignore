@@ -5,3 +5,4 @@ probe-results/
 .venv/
 .env
 .vercel/
+supabase/.temp/

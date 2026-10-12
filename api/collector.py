@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import app as local
@@ -50,8 +51,8 @@ def save_records(client, feed, records):
     for record in changed_rows:
         notice_id = record.pop("id")
         client.table("tenderdesk_notices").update(record).eq("id", notice_id).execute()
-    for record in unchanged_rows:
-        client.table("tenderdesk_notices").update({"last_seen": at, "url": record["url"]}).eq("id", record["id"]).execute()
+    if unchanged_rows:
+        client.table("tenderdesk_notices").update({"last_seen": at}).in_("id", [row["id"] for row in unchanged_rows]).execute()
     if events:
         client.table("tenderdesk_events").insert(events).execute()
     return len(records), added, changed
@@ -64,7 +65,7 @@ def collect_feed(client, feed, config):
         remote_total, cursor = None, 1
         source = client.table("tenderdesk_sources").select("cursor").eq("id", feed).single().execute().data
         cursor = source.get("cursor", 1)
-        http = local.Client()
+        http = local.Client(timeout=12, attempts=1, deadline=started_clock + 180)
         body = http.get(local.FEEDS[feed][1])
         if feed == "gem":
             match = re.search(r"'csrf_bd_gem_nk':\s*'([^']+)'", body)
@@ -104,4 +105,6 @@ def collect_feed(client, feed, config):
 
 def run_collection(client):
     config = settings(client)
-    return [collect_feed(client, feed, config) for feed in local.FEEDS]
+    # Join all work before returning; serverless cannot keep detached threads alive.
+    with ThreadPoolExecutor(max_workers=len(local.FEEDS)) as pool:
+        return list(pool.map(lambda feed: collect_feed(client, feed, config), local.FEEDS))

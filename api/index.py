@@ -5,6 +5,8 @@ import io
 import json
 import os
 import re
+import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
@@ -60,6 +62,40 @@ def database():
 
 def iso_now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def collection_status(client):
+    rows = client.table("tenderdesk_collection").select("started,finished,next_allowed_at,lease_until,results").eq("id", 1).execute().data
+    state = rows[0] if rows else {}
+    now = datetime.now(timezone.utc)
+    lease = state.get("lease_until")
+    running = bool(lease and datetime.fromisoformat(lease.replace("Z", "+00:00")) > now)
+    ready = datetime.fromisoformat(state["next_allowed_at"].replace("Z", "+00:00")) if state.get("next_allowed_at") else now
+    next_tick = (int(max(now, ready).timestamp()) // 60 + 1) * 60
+    return {**state, "running": running, "current": list(local.FEEDS) if running else [],
+            "last_finished": state.get("finished"), "interval_seconds": 900,
+            "next_run": datetime.fromtimestamp(next_tick, timezone.utc).isoformat()}
+
+
+def perform_collection():
+    client, token = database(), str(uuid.uuid4())
+    claim = client.rpc("tenderdesk_claim_collection", {"run_token": token}).execute().data
+    if not claim:
+        status = collection_status(client)
+        return jsonify(queued=False, running=status["running"], sync=status,
+                       message="Collection is already running." if status["running"] else "The last fetch was less than 15 minutes ago. The next automatic check is scheduled."), 200
+    results = []
+    try:
+        results = run_collection(client)
+        successful = sum(item["state"] == "ok" for item in results)
+        fetched = sum(item.get("fetched", 0) for item in results)
+        added = sum(item.get("new", 0) for item in results)
+        message = f"Fetched {fetched} notices; {added} new. {successful}/{len(results)} feeds connected."
+        if successful < len(results):
+            message += " Some portals could not be reached; see Data sources for details."
+        return jsonify(queued=False, running=False, results=results, message=message, fetched=fetched, added=added), 200
+    finally:
+        client.table("tenderdesk_collection").update({"lease_until": None, "finished": iso_now(), "results": results}).eq("id", 1).eq("run_token", token).execute()
 
 
 def public_config():
@@ -220,7 +256,7 @@ def dashboard(user):
     for event in fetch_all("tenderdesk_events", "at"):
         day = event["at"][:10]
         activity[day] = activity.get(day, 0) + 1
-    return jsonify(stats={"total": len(rows), "open": sum(row["kind"] != "corrigendum" and (row.get("deadline") or "") > now for row in rows), "closing": sum(row["kind"] != "corrigendum" and now < (row.get("deadline") or "") <= week for row in rows), "corrigenda": sum(row["kind"] == "corrigendum" for row in rows), "saved": len(bookmarked_ids(profile["id"]))}, sources=sources, events=events, activity=[{"day": day, "count": count} for day, count in sorted(activity.items())[-7:]], runs=runs, sync={"running": False, "current": [], "last_finished": runs[0]["finished"] if runs else None, "next_run": None}, settings={row["key"]: row["value"] for row in database().table("tenderdesk_settings").select("key,value").execute().data}, server_time=now)
+    return jsonify(stats={"total": len(rows), "open": sum(row["kind"] != "corrigendum" and (row.get("deadline") or "") > now for row in rows), "closing": sum(row["kind"] != "corrigendum" and now < (row.get("deadline") or "") <= week for row in rows), "corrigenda": sum(row["kind"] == "corrigendum" for row in rows), "saved": len(bookmarked_ids(profile["id"]))}, sources=sources, events=events, activity=[{"day": day, "count": count} for day, count in sorted(activity.items())[-7:]], runs=runs, sync=collection_status(database()), settings={row["key"]: row["value"] for row in database().table("tenderdesk_settings").select("key,value").execute().data}, server_time=now)
 
 
 @app.post("/api/profile")
@@ -330,18 +366,21 @@ def update_settings(user):
 
 @app.route("/api/collect", methods=["GET", "POST"])
 def collect():
-    expected = os.getenv("CRON_SECRET")
+    expected = os.getenv("CRON_SECRET", "").strip()
     supplied = request.headers.get("Authorization", "")
-    if not expected or supplied != f"Bearer {expected}":
+    if not expected or not secrets.compare_digest(supplied, f"Bearer {expected}"):
         return jsonify(error="Unauthorized"), 401
-    return jsonify(results=run_collection(database()))
+    return perform_collection()
 
 
 @app.post("/api/sync")
 @require_user
 def manual_sync(user):
-    # A normal user cannot invoke the protected cron secret from their browser.
-    return jsonify(queued=False, running=False, message="A protected Vercel Cron job performs collection on its schedule."), 202
+    # Only the production server sends its existing narrow cron credential to
+    # this service-role-only Vault function; it never reaches the browser.
+    if os.getenv("VERCEL_ENV") == "production":
+        database().rpc("tenderdesk_set_collection_secret", {"cron_secret": configured_value("CRON_SECRET")}).execute()
+    return perform_collection()
 
 
 @app.get("/")

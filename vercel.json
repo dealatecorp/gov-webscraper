@@ -4,7 +4,5 @@
   "functions": {
     "api/index.py": { "maxDuration": 300, "includeFiles": "{web/**,app.py,auth.py,api/**}" }
   },
-  "crons": [
-    { "path": "/api/collect", "schedule": "0 2 * * *" }
-  ]
+  "crons": []
 }

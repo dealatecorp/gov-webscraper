@@ -56,7 +56,15 @@ Dates display in IST. GeM's public listing JavaScript displays the literal UTC-l
 
 ## Vercel + Supabase deployment
 
-The repository now includes a Vercel Python Function (`api/index.py`) and `vercel.json`. It serves the existing frontend, verifies Supabase Auth access tokens, stores TenderDesk data in the isolated `tenderdesk_*` PostgreSQL tables, stores PDFs in the private `tenderdesk-documents` bucket, and invokes the stateless collector every 15 minutes with Vercel Cron.
+The repository includes a Vercel Python Function (`api/index.py`) and `vercel.json`. It serves the frontend, verifies Supabase Auth access tokens, stores TenderDesk data in the isolated `tenderdesk_*` PostgreSQL tables, and stores PDFs in the private `tenderdesk-documents` bucket.
+
+**Fetch latest tenders** performs a real collection for signed-in users, shows results/errors, and reloads notices and recommendations. A shared database lease prevents overlapping jobs across serverless instances. All users share a minimum 15-minute gap between collection starts. Existing data is retained when a portal fails.
+
+Background collection uses **Supabase Cron**, because Vercel Hobby only permits daily native cron jobs. Apply `supabase/migrations/20261012111719_tenderdesk_collection_schedule.sql` to the intended Supabase project. The job `tenderdesk-15-minute-collection` checks eligibility once a minute and dispatches after the 15-minute gap (normally 15–16 minutes between starts). It continues with the browser closed. The URL in the migration is production-specific; change it for another deployment. No other project cron jobs are modified.
+
+On the first production button click, the backend securely stores its existing `CRON_SECRET` in Supabase Vault using a service-role-only, security-invoker function. The scheduled request reads that value from Vault. No credential is exposed to the frontend or committed in SQL. Collection state and helper functions are inaccessible to anonymous/authenticated database clients. The backend authenticates users before allowing button-triggered collection.
+
+Source requests are bounded and independent feeds run concurrently. Public listing windows are limited; remote blocking, CAPTCHA, timeouts, or portal changes appear in Data sources rather than fabricated tender data. Page coverage can be adjusted in Collection settings.
 
 Before deployment, create the following Vercel environment variables for Production, Preview and Development. Copy the first two from Supabase **Connect**; generate a random `CRON_SECRET`. Keep the secret key server-only and never commit a `.env` file.
 
@@ -67,7 +75,7 @@ SUPABASE_SECRET_KEY=sb_secret_...
 CRON_SECRET=<long-random-value>
 ```
 
-The schema migration has been applied to the connected Supabase project. After committing and pushing these files, import the repository in Vercel (or redeploy its connected project). Create a Supabase Auth user through the app's **Create account** button, configure its Auth URL settings to include the Vercel URL, then sign in and wait for the first Cron run.
+After applying the schema and collection migration, deploy the connected Vercel project. Create a Supabase Auth user through **Create account**, configure its Auth URL settings to include the Vercel URL, then sign in and click **Fetch latest tenders** to initialize the archive and the scheduler credential.
 
 ## Tests
 
