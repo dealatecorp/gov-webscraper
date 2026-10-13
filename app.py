@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlparse, urlu
 from urllib.request import Request, build_opener, HTTPCookieProcessor, HTTPRedirectHandler, urlopen
 from html.parser import HTMLParser
 from html import unescape
+from official_notice import OfficialNoticeError, fetch_official_notice
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('TENDER_DATA_DIR', str(ROOT / 'data')))
@@ -365,14 +366,31 @@ class Client:
     def __init__(self, timeout=30, attempts=2, deadline=None):
         self.timeout,self.attempts,self.deadline=timeout,attempts,deadline
         self.opener=build_opener(SafeRedirect(),HTTPCookieProcessor(http.cookiejar.CookieJar()))
-    def binary(self,url):
+    def binary(self,url,max_bytes=25_000_000,pdf_header_only=False):
         if not allowed_url(url):
             raise ValueError('Unexpected document URL')
-        with self.opener.open(Request(url,headers={'User-Agent':'TenderDesk/1.0 public-notice-monitor'}),timeout=20) as r:
-            body=r.read(25_000_001)
-            if len(body)>25_000_000:
-                raise ValueError('Document exceeds 25 MB download limit')
-            return body,r.geturl()
+        remaining=self.deadline-time.monotonic() if self.deadline else self.timeout
+        if remaining<=0:
+            raise TimeoutError('Source request time budget exhausted')
+        with self.opener.open(Request(url,headers={'User-Agent':'TenderDesk/1.0 public-notice-monitor'}),timeout=min(20,self.timeout,remaining)) as r:
+            final_url=r.geturl()
+            if not allowed_url(final_url):
+                raise ValueError('Document redirect outside supported official portals')
+            body=r.read(5)
+            if pdf_header_only and body==b'%PDF-':
+                return body,final_url
+            chunks=[body]; size=len(body)
+            reader=getattr(r,'read1',r.read)
+            while True:
+                if self.deadline and time.monotonic()>self.deadline:
+                    raise TimeoutError('Source request time budget exhausted')
+                chunk=reader(min(65_536,max_bytes+1-size))
+                if not chunk:
+                    break
+                chunks.append(chunk);size+=len(chunk)
+                if size>max_bytes:
+                    raise ValueError('Document exceeds download size limit')
+            return b''.join(chunks),final_url
     def get(self,url,data=None):
         if not allowed_url(url):
             raise ValueError('Unexpected source URL')
@@ -609,6 +627,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200,result)
             if path=='/api/notices':
                 return self.send(200,query_notices(params,user=user))
+            official_match=re.fullmatch(r'/api/notices/([^/]+)/official',path)
+            if official_match:
+                with connect() as c:
+                    notice=c.execute('SELECT * FROM notices WHERE id=?',(official_match.group(1),)).fetchone()
+                if not notice:
+                    return self.send(404,{'error':'Notice not found'})
+                try:
+                    result=fetch_official_notice(dict(notice),Client(timeout=15,attempts=1,deadline=time.monotonic()+20),allowed_url)
+                    return self.send(200,result)
+                except OfficialNoticeError as error:
+                    return self.send(502,{'error':str(error)})
             if path.startswith('/api/documents/'):
                 with connect() as c:
                     doc=c.execute('SELECT * FROM documents WHERE id=?',(path.rsplit('/',1)[-1],)).fetchone()

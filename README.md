@@ -33,7 +33,7 @@ Open Collection settings to adjust the interval (30–86400 seconds), number of 
 ## Features
 
 - Responsive dashboard, notice search, source/type/deadline filters, sorting and pagination.
-- Table/card views, persistent watchlist, notice drawer, revision history and official links.
+- Table/card views, persistent watchlist, notice drawer, revision history and an in-app official notice reader.
 - CSV export of matching records (maximum 10,000), formula-injection escaping.
 - SQLite WAL persistence of notices, events, settings, bookmarks and collection runs.
 - Source health, explicit coverage notes, retry/backoff, collection timestamps, stale-data errors.
@@ -41,6 +41,8 @@ Open Collection settings to adjust the interval (30–86400 seconds), number of 
 - Existing verified probe samples are imported once on an empty database, with import events; they are not marked as a successful live collection.
 
 ## Files and storage
+
+**View official notice** retrieves a read-only public-source snapshot inside the notice drawer; it does not redirect the browser. Source tables and text are sanitized, and the reader shows the source host and retrieval time. Portal scripts, navigation, forms, and submission controls are not included. **Find & preview PDFs** opens available documents inside the same drawer. Expired links, blocked sources, and CAPTCHA requirements show an in-app error with retry; TenderDesk does not bypass them. Official portal content remains authoritative, and submission still takes place on the official portal.
 
 `app.py`: HTTP server, collectors, scheduler and storage. `web/`: buildless UI. `data/tenders.sqlite3`: application database. `data/app.log`: collector errors and run summaries. Set `TENDER_DATA_DIR` to change storage; set `PORT` to change the local port. Back up SQLite using its backup API, or stop the server before copying the database and WAL files.
 
@@ -79,4 +81,4 @@ After applying the schema and collection migration, deploy the connected Vercel 
 
 ## Tests
 
-Run `python -m unittest discover -s tests -v`, `node --check web/app.js`, and `node --check web/session.js`. Tests use temporary databases, mocked Supabase identity responses, and saved public fixtures; no network requests are required.
+Run `python -m unittest discover -s tests -v`, `node --test tests/test_official_viewer.cjs`, `node --check web/app.js`, and `node --check web/session.js`. Tests use temporary databases, mocked Supabase identity responses, and saved public fixtures; no network requests are required. The reader tests cover source sanitization, authentication, portal failures, and asynchronous UI state; they do not replace live visual checks.

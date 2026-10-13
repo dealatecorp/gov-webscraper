@@ -267,6 +267,19 @@ def notice_detail(user, notice_id):
     return jsonify(notice=notice, history=history)
 
 
+@app.get("/api/notices/<notice_id>/official")
+@require_user
+def official_notice(user, notice_id):
+    rows = database().table("tenderdesk_notices").select("id,url,title,reference").eq("id", notice_id).execute().data
+    if not rows:
+        return jsonify(error="Notice not found"), 404
+    try:
+        client = local.Client(timeout=15, attempts=1, deadline=local.time.monotonic() + 20)
+        return jsonify(local.fetch_official_notice(rows[0], client, local.allowed_url))
+    except local.OfficialNoticeError as error:
+        return jsonify(error=str(error)), 502
+
+
 @app.get("/api/dashboard")
 @require_user
 def dashboard(user):
