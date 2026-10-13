@@ -1,18 +1,12 @@
 # TenderDesk
 
-## Local accounts and recommendations
+## Supabase accounts and recommendations
 
-Sign in with a provisioned account. Eight-hour HS256 JWT sessions use an HttpOnly, SameSite=Strict cookie, a randomly generated persistent signing key, expiry checks and server-side logout revocation. Passwords use salted PBKDF2-SHA256 (600,000 iterations). Ten failed login attempts trigger a 15-minute local lockout. All data APIs, exports and PDF downloads require login. The cookie intentionally lacks Secure for this HTTP localhost deployment; do not expose this server publicly. Protect the database on disk. This is not a production identity service: no password-reset/email-verification flow or administrative roles are provided.
+TenderDesk uses Supabase Auth for both local and deployed sessions. The browser receives only the publishable key; the secret key remains server-only. Email/password sign-up supports email confirmation, password recovery, persistent token refresh, and optional authenticator-app MFA. Every data API, export, and PDF download validates the Supabase access token. The local SQLite service maps a verified Supabase identity to its saved interests and watchlist; Supabase passwords are never stored locally.
 
 On Overview, expand **Edit your domains & interests**. Select multiple domains and/or comma-separated custom keywords. Recommendations match title, reference, organisation, category or description, exclude passed/unknown deadlines and corrigenda, and show matching terms. Matches are ordered by closing date, not ML relevance. Coverage is limited to the collected archive. Preferences and watchlists are user-specific; tender data, PDF cache and collector settings are shared. Legacy pre-login bookmarks remain preserved in the database but are not assigned to any new account.
 
-Provision another local account (prompts securely for its password):
-
-```powershell
-python create_user.py --email user@example.com --name "Your name" --domain railway
-```
-
-Add `--generate-password` to generate and display a random password once. Accounts are not created automatically at application startup.
+For production, keep email confirmation enabled, configure a custom SMTP provider, add every deployed/local callback URL to the Supabase Auth redirect allow list, and enable leaked-password protection plus CAPTCHA in the Supabase dashboard. Users can enable or remove TOTP two-step verification from **Collection settings → Account security**.
 
 ## PDF downloads and rapid refresh
 
@@ -24,7 +18,13 @@ A local procurement dashboard with real public records from GeM, CPPP (eProcurem
 
 ## Start
 
-Run `python app.py` in this directory, then open http://127.0.0.1:8765 . On Windows you can also run `powershell -ExecutionPolicy Bypass -File start.ps1`.
+Set the public Supabase connection values, run `python app.py`, then open http://127.0.0.1:8765 . The secret/service key is not needed for the local SQLite server.
+
+```powershell
+$env:SUPABASE_URL='https://your-project-ref.supabase.co'
+$env:SUPABASE_PUBLISHABLE_KEY='sb_publishable_...'
+python app.py
+```
 
 The process starts a collection immediately and targets a collection start every 30 seconds by default (slow cycles do not overlap). Closing the browser does not stop collection. Keep the server running; a sleeping/offline computer cannot collect. `install-autostart.ps1` registers a per-user Windows logon task; it is an optional OS-level setup separate from the server's own scheduler. Stop a foreground server with Ctrl+C. Run `Stop-ScheduledTask -TaskName TenderDeskCollector` to stop a task-launched server. Remove its logon task with `Unregister-ScheduledTask -TaskName TenderDeskCollector -Confirm:$false` if no longer needed.
 
@@ -75,8 +75,8 @@ SUPABASE_SECRET_KEY=sb_secret_...
 CRON_SECRET=<long-random-value>
 ```
 
-After applying the schema and collection migration, deploy the connected Vercel project. Create a Supabase Auth user through **Create account**, configure its Auth URL settings to include the Vercel URL, then sign in and click **Fetch latest tenders** to initialize the archive and the scheduler credential.
+After applying the schema and collection migration, deploy the connected Vercel project. Configure Supabase Auth URL settings for the production URL and `/` callback, keep email confirmation enabled, then create an account in TenderDesk and click **Fetch latest tenders** to initialize the archive and scheduler credential.
 
 ## Tests
 
-Run `python -m unittest discover -s tests -v` and `node --check web/app.js`. Tests use temporary databases and saved public fixtures; no network requests are required.
+Run `python -m unittest discover -s tests -v`, `node --check web/app.js`, and `node --check web/session.js`. Tests use temporary databases, mocked Supabase identity responses, and saved public fixtures; no network requests are required.

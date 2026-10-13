@@ -34,6 +34,7 @@ class VercelSessionTests(unittest.TestCase):
             return httpx.Response(200, json={
                 "id": USER_ID, "aud": "authenticated", "role": "authenticated",
                 "email": "demo@example.test", "created_at": "2026-10-12T00:00:00Z",
+                "confirmed_at": "2026-10-12T00:01:00Z",
                 "app_metadata": {}, "user_metadata": {},
             })
         self.assertEqual(request.url.path, "/rest/v1/profiles")

@@ -1,4 +1,5 @@
 """TenderDesk: local dashboard, SQLite archive, and scheduled public collectors."""
+import base64
 import csv
 import auth
 import hashlib
@@ -17,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlparse, urlunparse
-from urllib.request import Request, build_opener, HTTPCookieProcessor, HTTPRedirectHandler
+from urllib.request import Request, build_opener, HTTPCookieProcessor, HTTPRedirectHandler, urlopen
 from html.parser import HTMLParser
 from html import unescape
 
@@ -110,6 +111,57 @@ def init_db():
                 c.execute('UPDATE events SET payload=? WHERE id=?',(json.dumps(payload),row['id']))
         # A terminated collector must never look as if it is still working.
         c.execute("UPDATE sources SET state='interrupted',error='Collector stopped before completion; a new attempt will run.' WHERE state='running'")
+
+def supabase_public_config():
+    url=os.environ.get('SUPABASE_URL','').strip().rstrip('/')
+    key=os.environ.get('SUPABASE_PUBLISHABLE_KEY','').strip()
+    parsed=urlparse(url)
+    local_host=parsed.hostname in {'127.0.0.1','localhost'}
+    if (parsed.scheme!='https' and not (parsed.scheme=='http' and local_host)) or not parsed.hostname or parsed.username or parsed.password or parsed.path not in ('','/') or parsed.query or parsed.fragment:
+        raise RuntimeError('SUPABASE_URL must be a valid HTTPS URL')
+    if not key or len(key)>4096 or any(ord(char)<33 or ord(char)>126 for char in key):
+        raise RuntimeError('SUPABASE_PUBLISHABLE_KEY is not configured')
+    return {'url':url,'key':key}
+
+def supabase_identity(token):
+    """Validate a browser access token with Supabase Auth and map its user locally."""
+    if not token or len(token)>8192 or any(char.isspace() for char in token):
+        return None
+    try:
+        config=supabase_public_config()
+        request=Request(config['url']+'/auth/v1/user',headers={
+          'apikey':config['key'],'Authorization':'Bearer '+token,'Accept':'application/json'})
+        with urlopen(request,timeout=10) as response:
+            identity=json.load(response)
+        if not isinstance(identity,dict) or not identity.get('id') or not identity.get('email'):
+            return None
+        if not (identity.get('email_confirmed_at') or identity.get('confirmed_at')):
+            return None
+        verified_factors=[factor for factor in identity.get('factors') or []
+          if isinstance(factor,dict) and factor.get('status')=='verified']
+        if verified_factors:
+            try:
+                part=token.split('.')[1]
+                claims=json.loads(base64.urlsafe_b64decode(part+'='*(-len(part)%4)))
+            except (ValueError,IndexError,json.JSONDecodeError):
+                return None
+            if claims.get('aal')!='aal2':
+                return None
+        with connect() as c:
+            return auth.from_supabase(c,identity)
+    except HTTPError as error:
+        if error.code not in (400,401,403):
+            logging.warning('Supabase identity request failed with HTTP %s',error.code)
+        return None
+    except (OSError,ValueError,KeyError,RuntimeError):
+        return None
+
+def supabase_connect_sources():
+    try:
+        url=supabase_public_config()['url']
+        return f" {url} {url.replace('https://','wss://',1).replace('http://','ws://',1)}"
+    except RuntimeError:
+        return ''
 
 def settings():
     with connect() as c:
@@ -511,8 +563,11 @@ def dashboard():
 
 class Handler(BaseHTTPRequestHandler):
     def session(self):
-        with connect() as c:
-            return auth.from_cookie(c,self.headers.get('Cookie'))
+        header=self.headers.get('Authorization','')
+        if not header.startswith('Bearer '):
+            return None
+        user=supabase_identity(header.removeprefix('Bearer '))
+        return (user,'supabase') if user else None
     def log_message(self,fmt,*args):
         logging.debug(fmt,*args)
     def send(self,status,body,ctype='application/json; charset=utf-8',extra=None):
@@ -524,7 +579,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('X-Content-Type-Options','nosniff')
         self.send_header('Referrer-Policy','no-referrer')
         self.send_header('Cache-Control','no-store')
-        self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
+        self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'"+supabase_connect_sources()+"; frame-src 'self' blob:; object-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+        self.send_header('Permissions-Policy','camera=(), microphone=(), geolocation=()')
         for k,v in (extra or {}).items():
             self.send_header(k,v)
         self.end_headers();self.wfile.write(body)
@@ -535,6 +591,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(403,{'error':'Local access only'})
         parsed=urlparse(self.path); path=parsed.path; params=parse_qs(parsed.query)
         try:
+            if path=='/api/config':
+                try:
+                    return self.send(200,supabase_public_config())
+                except RuntimeError as error:
+                    return self.send(503,{'error':str(error)})
             session=self.session() if path.startswith('/api/') else None
             if path.startswith('/api/') and not session:
                 return self.send(401,{'error':'Please sign in'})
@@ -594,28 +655,10 @@ class Handler(BaseHTTPRequestHandler):
             body=json.loads(self.rfile.read(length) or b'{}')
             if not isinstance(body,dict):
                 raise ValueError('Invalid body')
-            if self.path=='/api/login':
-                if not isinstance(body.get('email'),str) or not isinstance(body.get('password'),str) or len(body['password'])>128:
-                    raise ValueError('Invalid credentials')
-                interests=body.get('interests');keywords=body.get('keywords','')
-                if interests is not None and (not isinstance(interests,list) or len(interests)>10 or any(not isinstance(x,str) or x not in auth.DOMAINS for x in interests) or not isinstance(keywords,str) or len(keywords)>300):
-                    raise ValueError('Invalid interests')
-                with connect() as c:
-                    result,error=auth.login(c,body['email'],body['password'])
-                    if result and interests is not None:
-                        c.execute('UPDATE users SET interests=?,keywords=? WHERE id=?',(json.dumps(interests),keywords,result[0]['id']))
-                        result[0]['interests']=interests;result[0]['keywords']=keywords
-                if error:
-                    return self.send(401,{'error':error})
-                return self.send(200,{'user':result[0]},extra={'Set-Cookie':'td_session='+result[1]+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800'})
             session=self.session()
             if not session:
                 return self.send(401,{'error':'Please sign in'})
             user=session[0]
-            if self.path=='/api/logout':
-                with connect() as c:
-                    c.execute('DELETE FROM sessions WHERE id=?',(session[1],))
-                return self.send(200,{'ok':True},extra={'Set-Cookie':'td_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'})
             if self.path=='/api/profile':
                 interests=body.get('interests');keywords=body.get('keywords','')
                 if not isinstance(interests,list) or len(interests)>10 or any(not isinstance(x,str) or x not in auth.DOMAINS for x in interests) or not isinstance(keywords,str) or len(keywords)>300:

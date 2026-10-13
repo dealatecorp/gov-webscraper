@@ -1,4 +1,5 @@
 """Vercel entry point for the TenderDesk web app and stateless API."""
+import base64
 import csv
 import hashlib
 import io
@@ -10,6 +11,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 from flask import Flask, Response, g, jsonify, redirect, request, send_from_directory
@@ -23,6 +25,28 @@ WEB = ROOT / "web"
 DOMAINS = local.auth.DOMAINS
 
 app = Flask(__name__)
+
+
+@app.after_request
+def security_headers(response):
+    connect_sources = ["'self'"]
+    parsed = urlparse(os.getenv("SUPABASE_URL", "").strip())
+    if parsed.scheme == "https" and parsed.hostname:
+        origin = f"https://{parsed.hostname}" + (f":{parsed.port}" if parsed.port else "")
+        connect_sources.extend((origin, origin.replace("https://", "wss://", 1)))
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("Cache-Control", "no-store")
+    response.headers.setdefault("Content-Security-Policy",
+        "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; "
+        "style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; connect-src " + " ".join(connect_sources) + "; "
+        "frame-src 'self' blob:; object-src 'self' blob:; "
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+    return response
 
 
 def configured_value(name):
@@ -118,10 +142,18 @@ def current_user():
     if not header.startswith("Bearer "):
         return None
     try:
-        result = supabase_client("SUPABASE_PUBLISHABLE_KEY").auth.get_user(
-            header.removeprefix("Bearer ")
-        )
-        return result.user if result and result.user else None
+        token = header.removeprefix("Bearer ")
+        result = supabase_client("SUPABASE_PUBLISHABLE_KEY").auth.get_user(token)
+        user = result.user if result and result.user else None
+        if not user or not (user.email_confirmed_at or user.confirmed_at):
+            return None
+        verified_factors = [factor for factor in (user.factors or []) if factor.status == "verified"]
+        if verified_factors:
+            part = token.split(".")[1]
+            claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+            if claims.get("aal") != "aal2":
+                return None
+        return user
     except Exception as error:
         app.logger.warning("Supabase token validation failed: %s", type(error).__name__)
         return None

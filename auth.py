@@ -1,4 +1,4 @@
-"""Local-only HS256 JWT sessions, password hashing and interest matching."""
+"""Local user data mapping, legacy session helpers, and interest matching."""
 import base64
 import hashlib
 import hmac
@@ -26,6 +26,9 @@ def initialize(c):
     CREATE TABLE IF NOT EXISTS auth_config(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,user_id TEXT REFERENCES users(id),expires INTEGER);
     CREATE TABLE IF NOT EXISTS login_attempts(bucket TEXT PRIMARY KEY,attempts INTEGER,until INTEGER);
+    CREATE TABLE IF NOT EXISTS supabase_identities(
+      supabase_id TEXT PRIMARY KEY,
+      user_id TEXT UNIQUE NOT NULL REFERENCES users(id));
     ''')
     c.execute('INSERT OR IGNORE INTO auth_config VALUES(?,?)',('jwt_secret',secrets.token_hex(32)))
 
@@ -43,6 +46,26 @@ def create_user(c,email,name,password,interests,keywords=''):
 
 def profile(row):
     return {k:json.loads(row[k]) if k=='interests' else row[k] for k in ('id','email','name','interests','keywords')}
+
+def from_supabase(c, identity):
+    """Map a verified Supabase identity onto the local user-owned data."""
+    supabase_id=str(identity['id'])
+    email=str(identity['email']).strip().lower()
+    row=c.execute('''SELECT u.* FROM users u JOIN supabase_identities s
+      ON s.user_id=u.id WHERE s.supabase_id=?''',(supabase_id,)).fetchone()
+    if row:
+        return profile(row)
+    row=c.execute('SELECT * FROM users WHERE email=?',(email,)).fetchone()
+    if row:
+        user_id=row['id']
+    else:
+        metadata=identity.get('user_metadata') if isinstance(identity.get('user_metadata'),dict) else {}
+        name=str(metadata.get('name') or email.split('@')[0] or 'TenderDesk user')[:120]
+        user_id=supabase_id
+        c.execute('INSERT INTO users VALUES(?,?,?,?,?,?)',
+          (user_id,email,name,'supabase-managed',json.dumps([]),''))
+    c.execute('INSERT INTO supabase_identities VALUES(?,?)',(supabase_id,user_id))
+    return profile(c.execute('SELECT * FROM users WHERE id=?',(user_id,)).fetchone())
 
 def b64(value):
     return base64.urlsafe_b64encode(value).rstrip(b'=').decode()

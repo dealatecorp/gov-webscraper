@@ -19,7 +19,8 @@ const icons = {
  arrow:'<path d="M6 18 18 6M6 6h12v12"/>',
  menu:'<path d="M3 6h18M3 12h18M3 18h18"/>',
  plus:'<path d="M12 4v16M4 12h16"/>',
- check:'<path d="m4 12 5 5L20 6"/>'
+ check:'<path d="m4 12 5 5L20 6"/>',
+ file:'<path d="M6 2h8l4 4v16H6zM14 2v5h5M9 12h6M9 16h6"/>'
 };
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.info}</svg>`;
 document.querySelectorAll('[data-icon]').forEach(el=>el.innerHTML=icon(el.dataset.icon));
@@ -29,9 +30,9 @@ const fmt = (value, time=false) => value ? new Date(value).toLocaleString('en-IN
 const names = {gem:'GeM',cppp:'CPPP',epublish:'CPPP · Publish',defproc:'Defproc',hsl:'HSL'};
 const kinds = {tender:'Tender',auction:'Reverse auction',corrigendum:'Corrigendum'};
 let view='overview', page=1, kind='', mode=localStorage.getItem('tenderdesk-view')||'table';
-let dashboard=null, data={items:[],total:0}, sequence=0, detailId=null, toastTimer, fetchInFlight=false;
+let dashboard=null, data={items:[],total:0}, sequence=0, detailId=null, toastTimer, fetchInFlight=false, documentObjectUrl=null, documentLoadSequence=0;
 function relative(value){if(!value)return 'Not yet'; const diff=Math.max(0,(Date.now()-new Date(value))/1000);return diff<60?'Just now':diff<3600?`${Math.floor(diff/60)}m ago`:diff<86400?`${Math.floor(diff/3600)}h ago`:`${Math.floor(diff/86400)}d ago`;}
-async function api(path,body,raw=false){const headers=body===undefined?{}:{'Content-Type':'application/json'};const token=await window.tenderdeskAccessToken?.();if(token)headers.Authorization='Bearer '+token;const options={headers,...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)})};const response=await fetch(path,options);if(response.status===401&&path!=='/api/config'){showLogin();}if(!response.ok){const error=await response.json().catch(()=>({}));throw Error(error.error||'Request failed');}return raw?response:response.json();}
+async function api(path,body,raw=false){const headers=body===undefined?{}:{'Content-Type':'application/json','X-TenderDesk':'1'};const token=await window.tenderdeskAccessToken?.();if(token)headers.Authorization='Bearer '+token;const options={headers,...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)})};const response=await fetch(path,options);if(response.status===401&&path!=='/api/config'&&typeof showLogin==='function'){showLogin('Your session expired. Sign in again.');}if(!response.ok){const error=await response.json().catch(()=>({}));throw Error(error.error||'Request failed');}return raw?response:response.json();}
 function toast(text){$('#toast').textContent=text;$('#toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').hidden=true,3500);}
 function params(){const p=new URLSearchParams({page:String(page),sort:$('#sort-filter').value});for(const [key,value] of Object.entries({q:$('#search').value,source:$('#source-filter').value,status:$('#status-filter').value,kind,saved:view==='saved'?'1':''})){if(value)p.set(key,value);}return p;}
 function sourceBadge(feed){return `<span class="source-badge ${esc(feed)}">${esc(names[feed]||feed)}</span>`;}
@@ -60,9 +61,89 @@ function renderDashboard(d){dashboard=d;const s=d.stats;$('#nav-total').textCont
  if(!$('#settings-form').contains(document.activeElement))for(const [key,value]of Object.entries(d.settings)){const field=$(`#settings-form [name="${key}"]`);if(field)field.value=value;}
 }
 async function refreshDashboard(){try{const d=await api('/api/dashboard');renderDashboard(d);$('#connection-error').hidden=true;return d;}catch(e){$('#connection-error').textContent='Could not load the dashboard. Check the Vercel function logs if this continues.';$('#connection-error').hidden=false;$('#sidebar-status').textContent='Dashboard unavailable';$('#sync-label').textContent='Connection lost';$('#sync-dot').className='status-dot warning';return null;}}
-async function openDetail(id){detailId=id;const dialog=$('#detail-dialog');$('#detail-body').innerHTML='<div class="empty-state">Loading notice…</div>';if(!dialog.open)dialog.showModal();try{const result=await api('/api/notices/'+encodeURIComponent(id));if(detailId!==id)return;const n=result.notice;const safeUrl=/^https:\/\/(bidplus\.gem\.gov\.in|eprocure\.gov\.in|defproc\.gov\.in|eprocurehsl\.nic\.in)\//.test(n.url)?n.url:'#';$('#detail-body').innerHTML=`${sourceBadge(n.feed)} <span class="type-badge ${n.kind}">${kinds[n.kind]}</span><h2>${esc(n.title)}</h2><p class="reference">${esc(n.reference)}</p><div class="detail-actions"><a class="button primary" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">View official notice ${icon('arrow')}</a><button class="button secondary" data-save="${n.id}" data-saved="${n.bookmarked}">${icon('bookmark')}${n.bookmarked?'Saved to watchlist':'Save to watchlist'}</button></div><dl class="detail-fields"><div><dt>SUBMISSION DEADLINE · IST</dt><dd>${esc(fmt(n.deadline,true))}</dd></div><div><dt>BID OPENING · IST</dt><dd>${esc(fmt(n.opening,true))}</dd></div><div class="wide"><dt>ORGANISATION</dt><dd>${esc(n.organisation||'See official notice for the buying organisation')}</dd></div><div><dt>FIRST DISCOVERED</dt><dd>${esc(fmt(n.first_seen,true))}</dd></div><div><dt>LAST VERIFIED IN FEED</dt><dd>${esc(fmt(n.last_seen,true))}</dd></div></dl><div class="detail-description">${esc(n.description)}</div><section class="history"><h3>Tender PDFs</h3><button class="button secondary" id="fetch-documents">Find & download PDFs</button><div id="document-results" aria-live="polite"></div></section><div class="history"><h3>Revision history</h3>${result.history.map((h,index)=>{const prev=result.history[index+1]?.payload;const changes=prev?['title','deadline','opening','description'].filter(k=>h.payload[k]!==prev[k]):[];return `<div class="history-item"><strong>${h.event_type==='updated'?'Notice updated':h.event_type==='imported'?'Imported from verified sample':'First discovered'}</strong><p>${changes.length?changes.map(k=>k==='deadline'?`Deadline: ${fmt(prev.deadline,true)} → ${fmt(h.payload.deadline,true)}`:k==='opening'?'Bid opening date changed':`${k[0].toUpperCase()+k.slice(1)} changed`).map(esc).join('<br>'):'Saved a snapshot of the public listing.'}</p><time>${esc(fmt(h.at,true))} IST</time></div>`;}).join('')}</div><p class="reference">This record reflects the public feed. Confirm eligibility, documents and final dates on the official portal. Some portal links can expire.</p>`;}catch(e){$('#detail-body').innerHTML=`<div class="empty-state">${esc(e.message)}</div>`;}}
+function clearDocumentPreview(){
+ documentLoadSequence++;
+ if(documentObjectUrl)URL.revokeObjectURL(documentObjectUrl);
+ documentObjectUrl=null;
+ $('#detail-dialog')?.classList.remove('document-preview-open');
+}
+async function previewDocument(documentInfo,noticeId=detailId){
+ if(!documentInfo?.id||!noticeId||detailId!==noticeId)return;
+ const viewer=$('#pdf-viewer');
+ if(!viewer)return;
+ const requestId=++documentLoadSequence;
+ document.querySelectorAll('[data-document-id]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.documentId===String(documentInfo.id))));
+ $('#detail-dialog').classList.add('document-preview-open');
+ viewer.innerHTML=`<div class="pdf-viewer-loading" role="status">${icon('file')}<strong>Opening ${esc(documentInfo.name)}</strong><span>Preparing the saved PDF for in-app viewing…</span></div>`;
+ try{
+  const response=await api('/api/documents/'+encodeURIComponent(documentInfo.id),undefined,true);
+  const blob=await response.blob();
+  if(await blob.slice(0,5).text()!=='%PDF-')throw Error('The saved file is not a valid PDF. Open the official notice to retrieve it again.');
+  if(requestId!==documentLoadSequence||detailId!==noticeId)return;
+  if(documentObjectUrl)URL.revokeObjectURL(documentObjectUrl);
+  documentObjectUrl=URL.createObjectURL(blob);
+  const previewUrl=documentObjectUrl+'#view=FitH&toolbar=1&navpanes=0';
+  viewer.innerHTML=`<div class="pdf-viewer-toolbar"><div class="pdf-viewer-title">${icon('file')}<span><strong>${esc(documentInfo.name)}</strong><small>Saved ${esc(fmt(documentInfo.fetched,true))} IST</small></span></div><a class="button secondary" href="${esc(documentObjectUrl)}" download="${esc(documentInfo.name)}">${icon('download')}Download PDF</a></div><iframe class="pdf-frame" title="Preview of ${esc(documentInfo.name)}" src="${esc(previewUrl)}"></iframe><p class="pdf-viewer-note">Previewing TenderDesk's saved copy. Confirm the latest documents and conditions on the official portal before bidding.</p>`;
+ }catch(error){
+  if(requestId===documentLoadSequence&&detailId===noticeId)viewer.innerHTML=`<div class="pdf-viewer-error"><strong>PDF preview unavailable</strong><span>${esc(error.message)}</span><button class="button secondary" type="button" data-document-id="${esc(documentInfo.id)}" data-document-name="${esc(documentInfo.name)}" data-document-fetched="${esc(documentInfo.fetched)}">Try again</button></div>`;
+ }
+}
+function renderDocumentResults(result,noticeId){
+ const target=$('#document-results');
+ if(!target||detailId!==noticeId)return;
+ const documents=Array.isArray(result.documents)?result.documents:[];
+ if(!documents.length){target.innerHTML=`<p class="document-message">${esc(result.message)}</p>`;return;}
+ target.innerHTML=`<p class="document-message">${esc(result.message)}</p><div class="document-picker" aria-label="Available tender PDFs">${documents.map((documentInfo,index)=>`<button class="document-option" type="button" data-document-id="${esc(documentInfo.id)}" data-document-name="${esc(documentInfo.name)}" data-document-fetched="${esc(documentInfo.fetched)}" aria-pressed="${index===0}">${icon('file')}<span><strong>${esc(documentInfo.name)}</strong><small>Saved ${esc(fmt(documentInfo.fetched,true))} IST</small></span></button>`).join('')}</div><div id="pdf-viewer" class="pdf-viewer" aria-live="polite"></div>`;
+ previewDocument(documents[0],noticeId);
+}
+async function openDetail(id){
+ clearDocumentPreview();
+ detailId=id;
+ const dialog=$('#detail-dialog');
+ $('#detail-body').innerHTML='<div class="empty-state">Loading notice…</div>';
+ if(!dialog.open)dialog.showModal();
+ try{
+  const result=await api('/api/notices/'+encodeURIComponent(id));
+  if(detailId!==id)return;
+  const n=result.notice;
+  const safeUrl=/^https:\/\/(bidplus\.gem\.gov\.in|eprocure\.gov\.in|defproc\.gov\.in|eprocurehsl\.nic\.in)\//.test(n.url)?n.url:'#';
+  $('#detail-body').innerHTML=`${sourceBadge(n.feed)} <span class="type-badge ${n.kind}">${kinds[n.kind]}</span><h2>${esc(n.title)}</h2><p class="reference">${esc(n.reference)}</p><div class="detail-actions"><a class="button primary" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">View official notice ${icon('arrow')}</a><button class="button secondary" data-save="${esc(n.id)}" data-saved="${n.bookmarked}">${icon('bookmark')}${n.bookmarked?'Saved to watchlist':'Save to watchlist'}</button></div><dl class="detail-fields"><div><dt>SUBMISSION DEADLINE · IST</dt><dd>${esc(fmt(n.deadline,true))}</dd></div><div><dt>BID OPENING · IST</dt><dd>${esc(fmt(n.opening,true))}</dd></div><div class="wide"><dt>ORGANISATION</dt><dd>${esc(n.organisation||'See official notice for the buying organisation')}</dd></div><div><dt>FIRST DISCOVERED</dt><dd>${esc(fmt(n.first_seen,true))}</dd></div><div><dt>LAST VERIFIED IN FEED</dt><dd>${esc(fmt(n.last_seen,true))}</dd></div></dl><div class="detail-description">${esc(n.description)}</div><section class="history document-section"><h3>Tender PDFs</h3><p>Retrieve available tender documents and review them without leaving this notice.</p><button class="button secondary" id="fetch-documents">Find & preview PDFs</button><div id="document-results" class="document-results" aria-live="polite"></div></section><div class="history"><h3>Revision history</h3>${result.history.map((h,index)=>{const prev=result.history[index+1]?.payload;const changes=prev?['title','deadline','opening','description'].filter(k=>h.payload[k]!==prev[k]):[];return `<div class="history-item"><strong>${h.event_type==='updated'?'Notice updated':h.event_type==='imported'?'Imported from verified sample':'First discovered'}</strong><p>${changes.length?changes.map(k=>k==='deadline'?`Deadline: ${fmt(prev.deadline,true)} → ${fmt(h.payload.deadline,true)}`:k==='opening'?'Bid opening date changed':`${k[0].toUpperCase()+k.slice(1)} changed`).map(esc).join('<br>'):'Saved a snapshot of the public listing.'}</p><time>${esc(fmt(h.at,true))} IST</time></div>`;}).join('')}</div><p class="reference">This record reflects the public feed. Confirm eligibility, documents and final dates on the official portal. Some portal links can expire.</p>`;
+ }catch(e){
+  $('#detail-body').innerHTML=`<div class="empty-state">${esc(e.message)}</div>`;
+ }
+}
 function route(){const next=location.hash.slice(1)||'overview';view=['overview','tenders','updates','saved','sources','settings'].includes(next)?next:'overview';page=1;kind=view==='updates'?'corrigendum':'';$('#sidebar').classList.remove('open');document.querySelectorAll('[data-nav]').forEach(a=>a.classList.toggle('active',a.dataset.nav===view));const titles={overview:['Overview','Opportunity, in focus.','The latest public tenders. Four portals. One clear view.'],tenders:['All opportunities','Find your next opportunity.','Search your growing archive of government procurement notices.'],updates:['Corrigenda & updates','Stay ahead of the changes.','Deadline extensions, amendments, and corrections in one place.'],saved:['Watchlist','Keep the right opportunities close.','Your saved notices, ready for a closer look.'],sources:['Data sources','A clear view of your sources.','Collection health, coverage, and the latest run for every feed.'],settings:['Collection settings','A rhythm that works for you.','Control how often your workspace checks for new opportunities.']};const t=titles[view];$('#breadcrumb').textContent=t[0];$('#page-title').textContent=t[1];$('#page-subtitle').textContent=t[2];$('#overview-section').hidden=view!=='overview';$('#tenders-section').hidden=['sources','settings'].includes(view);$('#sources-section').hidden=view!=='sources';$('#settings-section').hidden=view!=='settings';$('#recent-section').hidden=!['overview','updates'].includes(view);$('#export').hidden=['sources','settings'].includes(view);$('#list-title').childNodes[0].textContent=view==='saved'?'Your watchlist ':view==='updates'?'Latest corrigenda ':'Explore opportunities ';$('#kind-tabs').hidden=view==='updates';document.querySelectorAll('[data-kind]').forEach(el=>el.classList.toggle('active',el.dataset.kind===kind));if(!$('#tenders-section').hidden)loadNotices();}
-document.addEventListener('click',async e=>{if(e.target.closest('#fetch-documents')){const id=detailId;const button=$('#fetch-documents');button.disabled=true;button.textContent='Fetching official PDFs…';try{const result=await api('/api/documents',{id});if(detailId===id)$('#document-results').innerHTML='<p>'+esc(result.message)+'</p>'+result.documents.map(d=>`<p><a class="button secondary" href="${esc(d.url)}" download>Download ${esc(d.name)} ${icon('download')}</a><small> Saved ${esc(fmt(d.fetched,true))} IST</small></p>`).join('');}catch(error){if(detailId===id)$('#document-results').textContent=error.message;}finally{if(detailId===id){button.disabled=false;button.textContent='Find & download PDFs';}}return;}const detail=e.target.closest('[data-detail]');if(detail){openDetail(detail.dataset.detail);return;}const save=e.target.closest('[data-save]');if(save){const id=save.dataset.save;const n=data.items.find(x=>x.id===id);const saved=save.hasAttribute('data-saved')?save.dataset.saved==='1':!!n?.bookmarked;save.disabled=true;try{await api('/api/bookmark',{id,saved:!saved});toast(saved?'Removed from your watchlist':'Added to your watchlist');await Promise.all([loadNotices(),refreshDashboard()]);if($('#detail-dialog').open&&detailId===id)openDetail(id);}catch(error){toast(error.message);}finally{save.disabled=false;}return;}const metric=e.target.closest('[data-metric]');if(metric){const action=metric.dataset.metric;$('#search').value='';$('#source-filter').value='';$('#status-filter').value=['open','closing'].includes(action)?action:'';const target=action==='saved'?'saved':action==='corrigendum'?'updates':'tenders';if(location.hash==='#'+target)route();else location.hash=target;return;}const tab=e.target.closest('[data-kind]');if(tab){kind=tab.dataset.kind;page=1;document.querySelectorAll('[data-kind]').forEach(el=>el.classList.toggle('active',el===tab));loadNotices();}});
+document.addEventListener('click',async e=>{
+ const fetchButton=e.target.closest('#fetch-documents');
+ if(fetchButton){
+  const id=detailId;
+  fetchButton.disabled=true;
+  fetchButton.setAttribute('aria-busy','true');
+  fetchButton.textContent='Fetching official PDFs…';
+  try{
+   const result=await api('/api/documents',{id});
+   renderDocumentResults(result,id);
+  }catch(error){
+   if(detailId===id)$('#document-results').innerHTML=`<div class="pdf-viewer-error"><strong>Could not retrieve PDFs</strong><span>${esc(error.message)}</span></div>`;
+  }finally{
+   if(detailId===id){fetchButton.disabled=false;fetchButton.removeAttribute('aria-busy');fetchButton.textContent='Find & preview PDFs';}
+  }
+  return;
+ }
+ const documentButton=e.target.closest('[data-document-id]');
+ if(documentButton){
+  previewDocument({id:documentButton.dataset.documentId,name:documentButton.dataset.documentName,fetched:documentButton.dataset.documentFetched});
+  return;
+ }
+ const detail=e.target.closest('[data-detail]');
+ if(detail){openDetail(detail.dataset.detail);return;}
+ const save=e.target.closest('[data-save]');
+ if(save){const id=save.dataset.save;const n=data.items.find(x=>x.id===id);const saved=save.hasAttribute('data-saved')?save.dataset.saved==='1':!!n?.bookmarked;save.disabled=true;try{await api('/api/bookmark',{id,saved:!saved});toast(saved?'Removed from your watchlist':'Added to your watchlist');await Promise.all([loadNotices(),refreshDashboard()]);if($('#detail-dialog').open&&detailId===id)openDetail(id);}catch(error){toast(error.message);}finally{save.disabled=false;}return;}
+ const metric=e.target.closest('[data-metric]');
+ if(metric){const action=metric.dataset.metric;$('#search').value='';$('#source-filter').value='';$('#status-filter').value=['open','closing'].includes(action)?action:'';const target=action==='saved'?'saved':action==='corrigendum'?'updates':'tenders';if(location.hash==='#'+target)route();else location.hash=target;return;}
+ const tab=e.target.closest('[data-kind]');
+ if(tab){kind=tab.dataset.kind;page=1;document.querySelectorAll('[data-kind]').forEach(el=>el.classList.toggle('active',el===tab));loadNotices();}
+});
 $('#refresh').onclick=async()=>{
  if(fetchInFlight)return;
  fetchInFlight=true;
@@ -85,7 +166,7 @@ $('#previous').onclick=()=>{page--;loadNotices();};$('#next').onclick=()=>{page+
 $('#clear-filters').onclick=()=>{$('#search').value='';$('#source-filter').value='';$('#status-filter').value='';$('#sort-filter').value='latest';kind='';page=1;document.querySelectorAll('[data-kind]').forEach(el=>el.classList.toggle('active',el.dataset.kind===''));loadNotices();};
 $('#table-view').onclick=()=>{mode='table';localStorage.setItem('tenderdesk-view',mode);renderNotices();};$('#card-view').onclick=()=>{mode='cards';localStorage.setItem('tenderdesk-view',mode);renderNotices();};
 $('#settings-form').onsubmit=async e=>{e.preventDefault();const values=Object.fromEntries([...new FormData(e.target)].map(([k,v])=>[k,Number(v)]));const button=e.target.querySelector('button');button.disabled=true;try{await api('/api/settings',values);toast('Settings saved. A refresh will apply the new schedule.');await refreshDashboard();}catch(err){toast(err.message);}finally{button.disabled=false;}};
-$('#close-detail').onclick=()=>{$('#detail-dialog').close();detailId=null;};$('#detail-dialog').addEventListener('close',()=>detailId=null);
+$('#close-detail').onclick=()=>{$('#detail-dialog').close();};$('#detail-dialog').addEventListener('close',()=>{clearDocumentPreview();detailId=null;});
 $('#menu').onclick=()=>$('#sidebar').classList.toggle('open');$('#activity-button').onclick=()=>{if(view!=='overview'){location.hash='overview';setTimeout(()=>$('#recent-section').scrollIntoView({behavior:'smooth'}),60);}else $('#recent-section').scrollIntoView({behavior:'smooth'});};
 document.addEventListener('keydown',e=>{if(e.key==='/'&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)&&!$('#detail-dialog').open){e.preventDefault();if($('#tenders-section').hidden)location.hash='tenders';$('#search').focus();}});
 $('#today').textContent=new Date().toLocaleDateString('en-IN',{timeZone:'Asia/Kolkata',day:'numeric',month:'long',year:'numeric'});

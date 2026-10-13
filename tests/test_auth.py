@@ -1,4 +1,7 @@
 import json
+import io
+import os
+import base64
 import tempfile
 import threading
 import unittest
@@ -43,33 +46,54 @@ class AuthTests(unittest.TestCase):
             c.execute("UPDATE notices SET deadline='2000-01-01'")
         self.user['interests']=['railway']
         self.assertEqual(app.query_notices({'recommended':['1']},user=self.user)['total'],0)
-    def test_http_login_authorization_logout(self):
+    def test_verified_mfa_requires_aal2_token(self):
+        identity={'id':'00000000-0000-4000-8000-000000000002','email':'mfa@example.test',
+                  'email_confirmed_at':'2026-10-13T00:00:00Z','factors':[{'status':'verified'}]}
+        env={'SUPABASE_URL':'https://project.supabase.co','SUPABASE_PUBLISHABLE_KEY':'sb_publishable_test_key_for_tenderdesk'}
+        token=lambda aal:'e30.'+base64.urlsafe_b64encode(json.dumps({'aal':aal}).encode()).rstrip(b'=').decode()+'.signature'
+        response=lambda *args,**kwargs:io.BytesIO(json.dumps(identity).encode())
+        with patch.dict(os.environ,env),patch.object(app,'urlopen',side_effect=response):
+            self.assertIsNone(app.supabase_identity(token('aal1')))
+            self.assertEqual(app.supabase_identity(token('aal2'))['email'],identity['email'])
+    def test_http_supabase_authorization_and_public_config(self):
+        identity={'id':'00000000-0000-4000-8000-000000000001','email':'one@example.test',
+                  'email_confirmed_at':'2026-10-13T00:00:00Z','user_metadata':{'name':'One'}}
+        def auth_response(request,timeout=0):
+            self.assertEqual(request.headers['Authorization'],'Bearer valid-token')
+            return io.BytesIO(json.dumps(identity).encode())
+        env={'SUPABASE_URL':'https://project.supabase.co','SUPABASE_PUBLISHABLE_KEY':'sb_publishable_test_key_for_tenderdesk'}
         server=ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
-        with patch.object(app,'PORT',server.server_port):
+        with patch.object(app,'PORT',server.server_port),patch.dict(os.environ,env),patch.object(app,'urlopen',side_effect=auth_response):
             thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
-            def request(path,body=None,cookie=None):
+            def request(path,body=None,token=None):
                 headers={'X-TenderDesk':'1'}
-                if cookie:headers['Cookie']=cookie
+                if token:headers['Authorization']='Bearer '+token
                 req=Request('http://127.0.0.1:'+str(server.server_port)+path,data=json.dumps(body).encode() if body is not None else None,headers=headers)
                 return urlopen(req)
             try:
+                with request('/api/config') as response:
+                    config=json.load(response)
+                    self.assertEqual(config['url'],env['SUPABASE_URL'])
+                    self.assertEqual(config['key'],env['SUPABASE_PUBLISHABLE_KEY'])
+                    self.assertIn('cdn.jsdelivr.net',response.headers['Content-Security-Policy'])
+                    self.assertIn(env['SUPABASE_URL'],response.headers['Content-Security-Policy'])
+                    self.assertIn("frame-src 'self' blob:",response.headers['Content-Security-Policy'])
+                    self.assertIn("object-src 'self' blob:",response.headers['Content-Security-Policy'])
                 for path in ['/api/notices','/api/dashboard','/api/documents/any']:
                     with self.assertRaises(HTTPError) as raised:request(path)
                     self.assertEqual(raised.exception.code,401)
-                with request('/api/login',{'email':'one@example.test','password':'Long-test-password','interests':['electrical'],'keywords':'solar'}) as response:
-                    cookie=response.headers['Set-Cookie'].split(';')[0]
-                    self.assertIn('HttpOnly',response.headers['Set-Cookie'])
-                with request('/api/me',cookie=cookie) as response:
+                with request('/api/me',token='valid-token') as response:
                     user=json.load(response)['user']
                     self.assertEqual(user['id'],self.uid)
-                    self.assertEqual(user['interests'],['electrical'])
-                    self.assertEqual(user['keywords'],'solar')
-                with request('/api/profile',{'interests':['railway','it'],'keywords':'signalling'},cookie) as response:self.assertEqual(response.status,200)
-                with request('/api/me',cookie=cookie) as response:self.assertEqual(json.load(response)['user']['keywords'],'signalling')
-                with request('/api/bookmark',{'id':'rail','saved':True},cookie) as response:self.assertEqual(response.status,200)
-                with request('/api/notices?saved=1',cookie=cookie) as response:self.assertEqual(json.load(response)['total'],1)
-                with request('/api/logout',{},cookie) as response:self.assertEqual(response.status,200)
-                with self.assertRaises(HTTPError):request('/api/me',cookie=cookie)
+                    self.assertEqual(user['interests'],['railway'])
+                with request('/api/profile',{'interests':['railway','it'],'keywords':'signalling'},'valid-token') as response:self.assertEqual(response.status,200)
+                with request('/api/me',token='valid-token') as response:self.assertEqual(json.load(response)['user']['keywords'],'signalling')
+                with request('/api/bookmark',{'id':'rail','saved':True},'valid-token') as response:self.assertEqual(response.status,200)
+                with request('/api/notices?saved=1',token='valid-token') as response:self.assertEqual(json.load(response)['total'],1)
+                with app.connect() as c:
+                    mapping=c.execute('SELECT * FROM supabase_identities').fetchone()
+                    self.assertEqual(mapping['supabase_id'],identity['id'])
+                    self.assertEqual(mapping['user_id'],self.uid)
             finally:
                 server.shutdown();server.server_close();thread.join()
 

@@ -1,7 +1,69 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#102b36"><title>TenderDesk — Your procurement workspace</title><link rel="stylesheet" href="/styles.css"><script defer src="/app.js"></script></head>
 <body class="signed-out">
-<section id="login-screen" class="login-screen"><form id="login-form" class="panel login-card"><p class="eyebrow">TENDERDESK · PERSONAL WORKSPACE</p><h1>Opportunities that fit you.</h1><p>Sign in to discover relevant tenders and keep your own shortlist.</p><label>Email<input name="email" type="email" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><fieldset class="login-interests"><legend>What opportunities interest you?</legend><p>Choose one or more domains. Leave blank to keep your saved interests.</p><div class="domain-options"><label><input type="checkbox" name="domain" value="railway">Railway</label><label><input type="checkbox" name="domain" value="construction">Construction</label><label><input type="checkbox" name="domain" value="it">IT & technology</label><label><input type="checkbox" name="domain" value="healthcare">Healthcare</label><label><input type="checkbox" name="domain" value="defence">Defence</label><label><input type="checkbox" name="domain" value="marine">Marine</label><label><input type="checkbox" name="domain" value="electrical">Electrical</label></div><label>Custom keywords, separated by commas<input name="keywords" maxlength="300" placeholder="railway signalling, track maintenance"></label></fieldset><button class="button primary" type="submit" disabled>Sign in →</button><button class="button secondary" id="signup" type="button">Create account</button><noscript>JavaScript is required to sign in safely.</noscript><p id="login-error" role="alert"></p><small>Supabase Auth · secure cloud session</small></form></section>
+    <section id="login-screen" class="login-screen">
+      <aside class="auth-context" aria-label="TenderDesk overview">
+        <a class="auth-brand" href="./" aria-label="TenderDesk home">
+          <span class="auth-brand-mark" aria-hidden="true">T</span>
+          <span>TenderDesk</span>
+        </a>
+        <div class="auth-context-copy">
+          <h2>Government opportunities, organized around your next decision.</h2>
+          <p>Find relevant tenders, keep a private shortlist, and follow the details that decide whether a bid is worth pursuing.</p>
+          <ul class="auth-benefits">
+            <li><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 10 3 3 7-7"/></svg><span>Search and compare opportunities in one workspace</span></li>
+            <li><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 10 3 3 7-7"/></svg><span>Save tenders to a private, focused watchlist</span></li>
+            <li><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 10 3 3 7-7"/></svg><span>Track deadlines and corrigendum activity</span></li>
+          </ul>
+        </div>
+        <p class="auth-context-note">TenderDesk helps you review opportunities. Always verify final bid details on the issuing authority's portal.</p>
+      </aside>
+
+      <div class="auth-entry">
+      <form id="login-form" class="panel login-card" aria-labelledby="login-title" data-mode="signin">
+        <div class="auth-mobile-brand" aria-hidden="true"><span class="auth-brand-mark">T</span><span>TenderDesk</span></div>
+        <div class="auth-mode-switch" role="tablist" aria-label="Account access">
+          <button id="auth-mode-signin" type="button" role="tab" aria-selected="true" tabindex="0" data-auth-mode="signin">Sign in</button>
+          <button id="auth-mode-signup" type="button" role="tab" aria-selected="false" tabindex="-1" data-auth-mode="signup">Create account</button>
+        </div>
+        <div class="auth-form-body">
+          <header class="auth-card-header">
+            <h1 id="login-title">Welcome back.</h1>
+            <p id="login-copy">Sign in to review saved opportunities and recommendations.</p>
+          </header>
+          <div id="auth-status" class="auth-status" role="status"><i></i><span>Connecting securely to Supabase…</span></div>
+          <div class="auth-fields">
+            <label id="auth-name-field" hidden>Full name<input name="name" type="text" autocomplete="name" maxlength="120" disabled></label>
+            <label>Email address<input name="email" type="email" autocomplete="username" inputmode="email" maxlength="254" required disabled></label>
+            <label>Password<input name="password" type="password" autocomplete="current-password" minlength="1" maxlength="128" required disabled></label>
+            <label id="auth-confirm-field" hidden>Confirm password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" disabled></label>
+            <p id="password-guidance" class="auth-field-note" hidden>Use at least 12 characters. We will email you a confirmation link.</p>
+          </div>
+          <button class="button primary auth-submit" type="submit" disabled><span id="auth-submit-label">Sign in</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11m-4-4 4 4-4 4"/></svg></button>
+          <button class="text-button" id="forgot-password" type="button" disabled>Forgot your password?</button>
+          <noscript>JavaScript is required to sign in safely.</noscript>
+          <p id="login-error" class="auth-message" role="alert"></p>
+          <small>Supabase Auth · email verification · optional authenticator MFA</small>
+        </div>
+      </form>
+  <form id="recovery-form" class="panel login-card" aria-labelledby="recovery-title" hidden>
+    <h1 id="recovery-title">Choose a new password.</h1>
+    <p>Use at least 12 characters and a password you do not use elsewhere.</p>
+    <label>New password<input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+    <label>Confirm new password<input name="confirm_password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+    <button class="button primary" type="submit">Update password</button>
+    <p id="recovery-error" class="auth-message" role="alert"></p>
+  </form>
+  <form id="mfa-form" class="panel login-card" aria-labelledby="mfa-title" hidden>
+    <h1 id="mfa-title">Enter your security code.</h1>
+    <p>Open your authenticator app and enter the current six-digit code.</p>
+    <label>Authentication code<input name="code" type="text" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required></label>
+    <button class="button primary" type="submit">Verify and continue</button>
+    <button class="text-button" id="cancel-mfa" type="button">Use another account</button>
+    <p id="mfa-error" class="auth-message" role="alert"></p>
+  </form>
+      </div>
+</section>
 <aside class="sidebar" id="sidebar">
   <a class="brand" href="/#overview"><span class="brand-icon">t<span>↗</span></span><span>TenderDesk<small>PROCUREMENT INTELLIGENCE</small></span></a>
   <div class="workspace"><span class="workspace-icon">IN</span><div>India workspace<small>Government opportunities</small></div><span class="chevron">⌄</span></div>
@@ -14,10 +76,10 @@
   </nav>
   <p class="nav-label">MANAGE</p>
   <nav aria-label="Management"><a href="#sources" data-nav="sources"><span data-icon="layers"></span>Data sources</a><a href="#settings" data-nav="settings"><span data-icon="settings"></span>Collection settings</a></nav>
-  <div class="sidebar-bottom"><div class="collection-dot"><i></i><span id="sidebar-status">Connecting to collectors</span></div><p>One place for your next<br>government opportunity.</p><div class="profile"><span>LW</span><div>Local workspace<small>Private · on this computer</small></div></div></div>
+  <div class="sidebar-bottom"><div class="collection-dot"><i></i><span id="sidebar-status">Connecting to collectors</span></div><p>One place for your next<br>government opportunity.</p><div class="profile"><span id="sidebar-avatar">TD</span><div><span id="sidebar-user">TenderDesk account</span><small id="sidebar-email">Protected by Supabase</small></div></div></div>
 </aside>
 <div class="app-shell">
-  <header class="topbar"><div><button class="icon-button mobile-menu" id="menu" aria-label="Toggle navigation"><span data-icon="menu"></span></button><span class="breadcrumb">Workspace <span>/</span> <b id="breadcrumb">Overview</b></span></div><div class="top-actions"><span class="time-label" id="today"></span><span class="timezone">IST</span><button class="icon-button" id="activity-button" aria-label="View recent activity"><span data-icon="bell"></span><i class="notification-dot"></i></button><span class="avatar">LW</span></div></header>
+  <header class="topbar"><div><button class="icon-button mobile-menu" id="menu" aria-label="Toggle navigation"><span data-icon="menu"></span></button><span class="breadcrumb">Workspace <span>/</span> <b id="breadcrumb">Overview</b></span></div><div class="top-actions"><span class="time-label" id="today"></span><span class="timezone">IST</span><button class="icon-button" id="activity-button" aria-label="View recent activity"><span data-icon="bell"></span><i class="notification-dot"></i></button><span class="avatar" id="top-avatar">TD</span></div></header>
   <main id="main">
     <div id="connection-error" class="error-banner" hidden></div>
     <section class="page-heading"><div><p class="eyebrow">YOUR PROCUREMENT WORKSPACE</p><h1 id="page-title">Opportunity, in focus.</h1><p id="page-subtitle">The latest public tenders. Four portals. One clear view.</p></div><div class="heading-actions"><button class="button secondary" id="export"><span data-icon="download"></span>Export CSV</button><button class="button primary" id="refresh"><span data-icon="refresh"></span><span>Fetch latest tenders</span></button></div></section>
@@ -39,7 +101,7 @@
       <div class="pagination"><span id="pagination-text">Loading…</span><div><button class="button secondary small" id="previous">← Previous</button><span id="page-number">1</span><button class="button secondary small" id="next">Next →</button></div></div>
     </section>
     <section id="sources-section" hidden><div class="source-grid" id="source-cards"></div><article class="panel runs-panel"><div class="panel-heading"><h2>Collection history</h2><span class="pill neutral">Last 20 runs</span></div><div id="run-history"></div></article></section>
-    <section id="settings-section" hidden><article class="panel settings-panel"><p class="eyebrow">BACKGROUND COLLECTION</p><h2>Keep your workspace up to date.</h2><p>Fetch latest tenders starts a real collection. Supabase checks automatically after a 15-minute gap, even when this browser is closed. Repeated clicks reuse the shared cooldown. You can adjust GeM page coverage here.</p><form id="settings-form"><label>GeM latest pages <span>10 notices per page, newest bid starts first</span><input name="gem_pages" type="number" min="1" max="20" required></label><label>GeM backfill pages per cycle <span>Continue through older listings; set 0 to pause backfill</span><input name="gem_backfill_pages" type="number" min="0" max="10" required></label><button class="button primary" type="submit">Save collection settings <span>→</span></button></form><div class="settings-note"><strong>What is collected</strong><p>GeM public bids and reverse auctions; CPPP, Defproc and HSL homepage tenders and corrigenda. CPPP includes both eProcurement and ePublishing. Homepage windows are limited; awards, cancellations and complete historical coverage are not yet collected.</p><strong>Storage & access</strong><p>Supabase stores notices and bookmarks. Tender PDFs are saved to a private Supabase Storage bucket. Collection continues through Supabase Cron while the browser is closed. The scheduler checks once per minute and dispatches when the 15-minute cooldown has elapsed.</p></div></article></section>
+    <section id="settings-section" hidden><article class="panel settings-panel"><p class="eyebrow">BACKGROUND COLLECTION</p><h2>Keep your workspace up to date.</h2><p>Fetch latest tenders starts a real collection. Supabase checks automatically after a 15-minute gap, even when this browser is closed. Repeated clicks reuse the shared cooldown. You can adjust GeM page coverage here.</p><form id="settings-form"><label>GeM latest pages <span>10 notices per page, newest bid starts first</span><input name="gem_pages" type="number" min="1" max="20" required></label><label>GeM backfill pages per cycle <span>Continue through older listings; set 0 to pause backfill</span><input name="gem_backfill_pages" type="number" min="0" max="10" required></label><button class="button primary" type="submit">Save collection settings <span>→</span></button></form><div class="settings-note"><strong>What is collected</strong><p>GeM public bids and reverse auctions; CPPP, Defproc and HSL homepage tenders and corrigenda. CPPP includes both eProcurement and ePublishing. Homepage windows are limited; awards, cancellations and complete historical coverage are not yet collected.</p><strong>Storage & access</strong><p>Supabase stores notices and bookmarks. Tender PDFs are saved to a private Supabase Storage bucket. Collection continues through Supabase Cron while the browser is closed. The scheduler checks once per minute and dispatches when the 15-minute cooldown has elapsed.</p></div></article><article class="panel settings-panel security-panel"><p class="eyebrow">ACCOUNT SECURITY</p><h2>Two-step verification.</h2><p id="mfa-status">Checking your account security…</p><button class="button secondary" id="mfa-enroll" type="button" disabled>Set up authenticator app</button><div id="mfa-setup" hidden><p>Scan this QR code with your authenticator app, then enter the six-digit code to finish.</p><img id="mfa-qr" alt="Authenticator setup QR code"><p class="mfa-secret">Manual setup key: <code id="mfa-secret"></code></p><label>Authentication code<input id="mfa-enroll-code" type="text" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"></label><button class="button primary" id="mfa-confirm" type="button">Enable two-step verification</button></div><p id="mfa-settings-error" class="auth-message" role="alert"></p></article></section>
     <section class="panel recent-panel" id="recent-section"><div class="panel-heading"><div><p class="eyebrow">THE LATEST IN YOUR WORKSPACE</p><h2>Recent activity</h2></div><span class="pill neutral">Detection history</span></div><div id="recent-activity"></div></section>
     <footer><span><b>TenderDesk</b> · Built for better discovery.</span><span>Dates in IST · Always confirm terms on the official portal.</span></footer>
   </main>
